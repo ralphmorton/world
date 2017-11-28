@@ -1,44 +1,124 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
 
 module Control.Monad.World (
+    MonadWait(..),
+    MonadSTM(..),
     MonadWorld(..),
-    RecordingError(..),
+    MonadConcurrent(..),
+    AsException(..),
+    TerminalException(..),
+    FileException(..),
+    TimeException(..),
+    Tape,
+    ArbiterError(..),
+    run,
     record,
-    replay
+    replay,
+    orThrow
 ) where
 
 import Prelude hiding (getLine, putStrLn, readFile, writeFile)
 
-import Control.Lens (_1, _2, _Just, at, over)
-import Control.Monad.Except (ExceptT)
-import Control.Monad.Reader (ReaderT)
+import Control.Concurrent (threadDelay)
+import qualified Control.Concurrent.Async as Async
+import qualified Control.Concurrent.STM as STM
+import Control.Exception (Exception, SomeException, handle)
+import Control.Lens (Prism', _1, _2, _Just, at, prism', review, over)
+import Control.Monad (foldM, forever, forM)
+import Control.Monad.Except (ExceptT, MonadError, runExceptT, throwError)
+import Control.Monad.Reader (ReaderT, runReaderT)
+import qualified Control.Monad.Reader as R
 import Control.Monad.State (StateT)
 import Control.Monad.Trans
 import qualified Data.Map as M
-import Data.Monoid ((<>))
+import Data.Monoid
 import qualified Data.Time as Time
 import qualified System.IO as IO
+import qualified System.Random as Random
 
-class Monad m => MonadWorld m where
+--
+-- Class
+--
+
+class Monad m => MonadSTM m where
+    atomically :: STM.STM a -> m a
+
+instance MonadSTM IO where
+    atomically = STM.atomically
+
+instance MonadSTM m => MonadSTM (ExceptT e m) where
+    atomically = lift . atomically
+
+instance MonadSTM m => MonadSTM (ReaderT e m) where
+    atomically = lift . atomically
+
+instance MonadSTM m => MonadSTM (StateT e m) where
+    atomically = lift . atomically
+
+class Monad m => MonadWait m where
+    wait :: Int -> m () -- wait n micros
+
+instance MonadWait IO where
+    wait = threadDelay
+
+instance MonadWait m => MonadWait (ExceptT e m) where
+    wait = lift . wait
+
+instance MonadWait m => MonadWait (ReaderT e m) where
+    wait = lift . wait
+
+instance MonadWait m => MonadWait (StateT e m) where
+    wait = lift . wait
+
+class Monad m => MonadConcurrent m where
+    mapConcurrently :: (Read b, Show b) => (a -> m b) -> [a] -> m [b] -- TODO: do some stuff with Monoid1 or similar to get traversable
+
+instance MonadConcurrent IO where
+    mapConcurrently = Async.mapConcurrently
+
+instance (Read e, Show e, MonadConcurrent m) => MonadConcurrent (ExceptT e m) where
+    mapConcurrently f ax = do
+        results <- lift $ mapConcurrently (runExceptT . f) ax
+        case sequence results of
+            Left e -> throwError e
+            Right bx -> pure bx
+
+instance MonadConcurrent m => MonadConcurrent (ReaderT r m) where
+    mapConcurrently f ax = do
+        r <- R.ask
+        lift $ mapConcurrently (flip runReaderT r . f) ax
+
+class (MonadSTM m, MonadWait m) => MonadWorld m where
     -- System.IO
-    getLine :: m String
-    putStrLn :: String -> m ()
-    readFile :: IO.FilePath -> m String
-    writeFile :: IO.FilePath -> String -> m ()
+    getLine :: m (Either TerminalException String)
+    putStrLn :: String -> m (Either TerminalException ())
+    readFile :: IO.FilePath -> m (Either FileException String)
+    writeFile :: IO.FilePath -> String -> m (Either FileException ())
 
     -- Data.Time
-    getCurrentTime :: m Time.UTCTime
+    getCurrentTime :: m (Either TimeException Time.UTCTime)
+
+    -- System.Random
+    randomRIO :: (Read a, Show a, Random.Random a) => (a, a) -> m a
 
 instance MonadWorld IO where
     -- System.IO
-    getLine = IO.getLine
-    putStrLn = IO.putStrLn
-    readFile = IO.readFile
-    writeFile = IO.writeFile
+    getLine = failSome (TerminalException . show) IO.getLine
+    putStrLn = failSome (TerminalException . show) . IO.putStrLn
+    readFile = failSome (FileException . show) . IO.readFile
+    writeFile fp = failSome (FileException . show) . IO.writeFile fp
 
     -- Data.Time
-    getCurrentTime = Time.getCurrentTime
+    getCurrentTime = failSome (TimeException . show) Time.getCurrentTime
+
+    -- System.Random
+    randomRIO = Random.randomRIO
+
+failSome :: (SomeException -> e) -> IO a -> IO (Either e a)
+failSome f = handle (pure . Left . f) . fmap Right
 
 instance MonadWorld m => MonadWorld (ExceptT e m) where
     -- System.IO
@@ -50,6 +130,9 @@ instance MonadWorld m => MonadWorld (ExceptT e m) where
     -- Data.Time
     getCurrentTime = lift getCurrentTime
 
+    -- System.Random
+    randomRIO = lift . randomRIO
+
 instance MonadWorld m => MonadWorld (ReaderT r m) where
     -- System.IO
     getLine = lift getLine
@@ -59,6 +142,9 @@ instance MonadWorld m => MonadWorld (ReaderT r m) where
 
     -- Data.Time
     getCurrentTime = lift getCurrentTime
+    
+    -- System.Random
+    randomRIO = lift . randomRIO
 
 instance MonadWorld m => MonadWorld (StateT r m) where
     -- System.IO
@@ -69,161 +155,322 @@ instance MonadWorld m => MonadWorld (StateT r m) where
 
     -- Data.Time
     getCurrentTime = lift getCurrentTime
+    
+    -- System.Random
+    randomRIO = lift . randomRIO
+
+--
+-- Exception types
+--
+
+class AsException e e' where
+    _Exception :: Prism' e e'
+
+instance AsException e e where
+    _Exception = prism' id pure
+
+data TerminalException
+    = TerminalException String
+    deriving (Eq, Read, Show)
+
+instance Exception TerminalException
+
+data FileException
+    = FileException String
+    deriving (Eq, Read, Show)
+
+instance Exception FileException
+
+data TimeException
+    = TimeException String
+    deriving (Eq, Read, Show)
+
+instance Exception TimeException
 
 --
 -- Public API
 --
 
-record :: Monad m => RecordT m a -> m (Either RecordingError (M.Map String [String], a))
-record f = fmap (over _1 rc) <$> runRecordT f (Recording Record M.empty)
+-- | Run a computation normally.
+run :: (MonadSTM m, MonadWait m) => ArbiterT m a -> m (Either ArbiterError a)
+run f = do
+    arb <- atomically (mkArbiting Noop M.empty)
+    runArbiterT f arb
 
-replay :: Monad m => RecordT m a -> M.Map String [String] -> m (Either RecordingError a)
-replay f tape = do
-    res <- runRecordT f (Recording Replay tape)
+-- | Record a computation, generating a
+-- result, and a tape for replay.
+record :: (MonadSTM m, MonadWait m) => ArbiterT m a -> m (Either ArbiterError (Tape, a))
+record f = do
+    arb <- atomically (mkArbiting Record M.empty)
+    res <- runArbiterT f arb
+    tape <- (atomically . STM.readTVar) (rc arb)
     pure $ do
-        (Recording _ depleted, a) <- res
-        case isCompletedDepleted depleted of
+        a <- res
+        pure (tape, a)
+
+-- | Replay an existing tape.
+replay :: (MonadSTM m, MonadWait m) => ArbiterT m a -> Tape -> m (Either ArbiterError a)
+replay f tape = do
+    arb <- atomically (mkArbiting Replay tape)
+    res <- runArbiterT f arb
+    depleted <- (atomically . STM.readTVar) (rc arb)
+    pure $ do
+        a <- res
+        case depleted == M.empty of
             True -> pure a
-            False -> Left TapeNotFullyDepleted
+            False -> Left (TapeNotFullyDepleted depleted)
 
-isCompletedDepleted :: M.Map String [String] -> Bool
-isCompletedDepleted = all id . fmap null . fmap snd . M.toList
+mkArbiting :: ArbiterOp -> Tape -> STM.STM Arbiting
+mkArbiting opv tape = do
+    kgv <- STM.newTVar 0
+    rcv <- STM.newTVar tape
+    pure Arbiting {
+        op = opv,
+        kg = kgv,
+        rc = rcv
+    }
+
+-- | Given `MonadWorld m, MonadError e m, AsException e e'`,
+-- and an `m (Either e' a)`, unwrap the result, throwing an `e`
+-- if the result is a Left.
+orThrow :: (MonadWorld m, MonadError e m, AsException e e') => m (Either e' a) -> m a
+orThrow m = do
+    res <- m
+    case res of
+        Left e -> throwError (review _Exception e)
+        Right r -> pure r
 
 --
--- Recording
+-- Arbiting
 --
 
-data Recording = Recording {
-    op :: RecordOp,
-    rc :: M.Map String [String]
-} deriving (Eq, Show)
+data Arbiting = Arbiting {
+    op :: ArbiterOp,
+    kg :: STM.TVar Key,
+    rc :: STM.TVar Tape
+}
 
-data RecordOp
-    = Record
+data ArbiterOp
+    = Noop
+    | Record
     | Replay
-    deriving (Eq, Show)
 
-data RecordT m a
-    = RecordT { runRecordT :: Recording -> m (Either RecordingError (Recording, a)) }
+type Tape = M.Map Key Value
 
-data RecordingError
-    = TapeNotFullyDepleted
-    | TapeTrackDepleted
-    | TapeTrackUnparseable String
-    deriving (Eq, Show)
+type Key = Int
 
-instance Functor m => Functor (RecordT m) where
-    fmap f (RecordT m) = RecordT (fmap (fmap $ over _2 f) . m)
+data Value
+    = Pending
+    | ExistingValue String
+    | ExistingTape Tape
+    deriving (Eq, Read, Show)
 
-instance Monad m => Applicative (RecordT m) where
-    pure v = RecordT $ \s -> (pure . pure) (s, v)
-    (<*>) (RecordT mf) (RecordT ma) = RecordT $ \s -> do
+data ArbiterT m a = ArbiterT {
+    runArbiterT :: Arbiting -> m (Either ArbiterError a)
+}
+
+data ArbiterError
+    = ParseFailure String
+    | TapeNotFullyDepleted Tape
+    | NonExistentKey Key
+    | KeyMismatch Key
+    | SubtreeError Key ArbiterError
+    deriving (Read, Show)
+
+instance Exception ArbiterError
+
+instance Functor m => Functor (ArbiterT m) where
+    fmap f (ArbiterT m) = ArbiterT (fmap (fmap f) . m)
+
+instance Monad m => Applicative (ArbiterT m) where
+    pure = ArbiterT . const . pure . pure
+    (<*>) (ArbiterT mf) (ArbiterT ma) = ArbiterT $ \s -> do
         e1 <- mf s
         case e1 of
             Left err -> pure (Left err)
-            Right (s', f) -> do
-                e2 <- ma s'
+            Right f -> do
+                e2 <- ma s
                 case e2 of
                     Left err -> pure (Left err)
-                    Right (s'', a) -> (pure . pure) (s'', f a)
+                    Right a -> (pure . pure) (f a)
 
-instance Monad m => Monad (RecordT m) where
+instance Monad m => Monad (ArbiterT m) where
     return = pure
-    (>>=) (RecordT ma) f = RecordT $ \s -> do
+    (>>=) (ArbiterT ma) f = ArbiterT $ \s -> do
         e <- ma s
         case e of
             Left err -> pure (Left err)
-            Right (s', a) -> runRecordT (f a) s'
+            Right a -> runArbiterT (f a) s
 
-instance MonadTrans RecordT where
-    lift ma = RecordT (fmap pure . (flip (,) <$> ma <*>) . pure)
+instance MonadTrans ArbiterT where
+    lift = ArbiterT . const . fmap pure
 
-instance MonadWorld m => MonadWorld (RecordT m) where
-    getLine = do
-        let key = mkKey "getLine" []
-        runOp getLine key
-    putStrLn s = do
-        let key = mkKey "putStrLn" [s]
-        runOp (putStrLn s) key
-    readFile fp = do
-        let key = mkKey "readFile" [fp]
-        runOp (readFile fp) key
-    writeFile fp v = do
-        let key = mkKey "writeFile" [fp, v]
-        runOp (writeFile fp v) key
-    getCurrentTime = do
-        let key = mkKey "getCurrentTime" []
-        runOp getCurrentTime key
+instance MonadIO m => MonadIO (ArbiterT m) where
+    liftIO = lift . liftIO
 
---
--- Basic manipulation
---
+instance MonadSTM m => MonadSTM (ArbiterT m) where
+    atomically = lift . atomically
 
-get :: Applicative m => RecordT m Recording
-get = RecordT $ \s -> (pure . pure) (s, s)
+instance MonadWait m => MonadWait (ArbiterT m) where
+    wait = lift . wait
 
-put :: Applicative m => Recording -> RecordT m ()
-put s = RecordT . const $ (pure . pure) (s, ())
+instance (MonadConcurrent m, MonadSTM m, MonadWait m) => MonadConcurrent (ArbiterT m) where
+    mapConcurrently = mapConcurrentlyImpl
 
-modify :: Monad m => (Recording -> Recording) -> RecordT m ()
-modify f = put . f =<< get
+instance MonadWorld m => MonadWorld (ArbiterT m) where
+    -- System.IO
+    getLine = runOp getLine
+    putStrLn = runOp . putStrLn
+    readFile = runOp . readFile
+    writeFile fp = runOp . writeFile fp
+
+    -- Data.Time
+    getCurrentTime = runOp getCurrentTime
+
+    -- System.Random
+    randomRIO = runOp . randomRIO
 
 --
--- Error
+-- Implementation of `mapConcurrently` for `ArbiterT`
 --
 
-apocalypse :: Monad m => RecordingError -> RecordT m a
-apocalypse err = (RecordT . const) (pure $ Left err)
+mapConcurrentlyImpl :: (MonadConcurrent m, MonadSTM m, MonadWait m, Read b, Show b) => (a -> ArbiterT m b) -> [a] -> ArbiterT m [b]
+mapConcurrentlyImpl f ax = do
+    arb <- ask
+    case op arb of
+        Noop -> do
+            results <- lift $ mapConcurrently (run . f) ax
+            case sequence results of
+                Left e -> throwArb e
+                Right bx -> pure bx
+        Record -> do
+            keyed <- attachKeys arb ax
+            let keys = fst <$> keyed
+            atomically $ mapM (flip (writeVal arb) Pending) keys
+            results <- lift $ mapConcurrently (record . withKey f) keyed
+            case sequence results of
+                Left e -> throwArb e
+                Right bx -> do
+                    atomically . forM bx $ \(t, (k, b)) -> do
+                        writeVal arb k (ExistingTape t)
+                    pure (snd . snd <$> bx)
+        Replay -> do
+            keyed <- attachKeys arb ax
+            let keys = fst <$> keyed
+            fx <- forM keyed $ \(k, a) -> do
+                tape <- retrieveKeyTape k
+                pure $ replay (f a) tape
+            results <- lift $ mapConcurrently id fx
+            case sequence results of
+                Left e -> throwArb e
+                Right bx -> pure bx
 
---
--- Make a key
---
+attachKeys :: MonadSTM m => Arbiting -> [a] -> m [(Key, a)]
+attachKeys arb = atomically . foldM attachKey mempty
+    where attachKey rx a = (rx<>) . pure . (,a) <$> genKey arb
 
-mkKey :: String -> [String] -> String
-mkKey op = foldr (<>) "" . (op:)
+withKey :: Monad m => (a -> m b) -> (k, a) -> m (k, b)
+withKey f (k, a) = do
+    b <- f a
+    pure (k, b)
+
+retrieveKeyTape :: (MonadSTM m, MonadWait m) => Key -> ArbiterT m Tape
+retrieveKeyTape k = do
+    arb <- ask
+    mVal <- atomically (takeVal arb k)
+    case mVal of
+        Just Pending -> do
+            forever (wait 1000)
+        Just (ExistingValue _) -> do
+            throwArb (KeyMismatch k)
+        Just (ExistingTape tape) -> do
+            pure tape
+        Nothing -> do
+            throwArb (NonExistentKey k)
 
 --
 -- Run an operation, either recording or replaying
 --
 
-runOp :: (Read a, Show a, Monad m) => m a -> String -> RecordT m a
-runOp f key = do
-    Recording op _ <- get
-    case op of
+runOp :: (Read a, Show a, MonadSTM m, MonadWait m) => m a -> ArbiterT m a
+runOp f = do
+    arb <- ask
+    k <- atomically (genKey arb)
+    runKeyedOp k (lift f)
+
+runKeyedOp :: (Read a, Show a, MonadSTM m, MonadWait m) => Key -> ArbiterT m a -> ArbiterT m a
+runKeyedOp k f = do
+    arb <- ask
+    case op arb of
+        Noop -> f
         Record -> do
-            a <- lift f
-            recordOp key a
+            atomically (writeVal arb k Pending)
+            a <- f
+            atomically (writeVal arb k . ExistingValue $ show a)
             pure a
         Replay -> do
-            replayOp key
+            res <- retrieveKeyValue arb k
+            case res of
+                Left e -> throwArb e
+                Right Nothing -> forever (wait 1000)
+                Right (Just a) -> pure a
+
+retrieveKeyValue :: (Read a, MonadSTM m, MonadWait m) => Arbiting -> Key -> m (Either ArbiterError (Maybe a))
+retrieveKeyValue arb k = do
+    mVal <- atomically (takeVal arb k)
+    case mVal of
+        Just Pending -> do
+            pure (Right Nothing)
+        Just (ExistingValue str) -> do
+            case readsPrec 0 str of
+                [(a, "")] -> (pure . Right) (Just a)
+                _ -> (pure . Left) (ParseFailure str)
+        Just (ExistingTape _) -> do
+            (pure . Left) (KeyMismatch k)
+        Nothing -> do
+            (pure . Left) (NonExistentKey k)
 
 --
--- Record an operation
+-- Basic manipulation
 --
 
-recordOp :: (Show a, Monad m) => String -> a -> RecordT m ()
-recordOp key val = modify f
-    where
-    mf = M.insertWith (<>) key [show val]
-    f (Recording op m) = Recording op (mf m)
+ask :: Applicative m => ArbiterT m Arbiting
+ask = ArbiterT (pure . pure)
 
 --
--- Replay an operation
+-- Error
 --
 
-replayOp :: (Read a, Monad m) => String -> RecordT m a
-replayOp key = do
-    str <- popKey key
-    case readsPrec 0 str of
-        [(a, "")] -> pure a
-        _ -> apocalypse (TapeTrackUnparseable str)
+throwArb :: Monad m => ArbiterError -> ArbiterT m a
+throwArb err = (ArbiterT . const) (pure $ Left err)
 
-popKey :: Monad m => String -> RecordT m String
-popKey key = do
-    Recording op m <- get
-    let vals = M.lookup key m
-    let m' = over (at key . _Just) tail m
-    put (Recording op m')
-    case vals of
-        Just (v:_) -> pure v
-        _ -> apocalypse TapeTrackDepleted
+--
+-- Generate a key
+--
+
+genKey :: Arbiting -> STM.STM Key
+genKey arb = do
+    let kgv = kg arb
+    v <- succ <$> STM.readTVar kgv
+    STM.writeTVar kgv v
+    pure v
+
+--
+-- Read a value
+--
+
+takeVal :: Arbiting -> Key -> STM.STM (Maybe Value)
+takeVal arb k = do
+    let rcv = rc arb
+    mVal <- M.lookup k <$> STM.readTVar rcv
+    STM.modifyTVar rcv (M.delete k)
+    pure mVal
+
+--
+-- Write a value
+--
+
+writeVal :: Arbiting -> Key -> Value -> STM.STM ()
+writeVal arb k v = do
+    let rcv = rc arb
+    STM.modifyTVar rcv (M.insert k v)

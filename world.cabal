@@ -22,10 +22,12 @@ library
   exposed-modules:     Control.Monad.World
   build-depends:       base >= 4.7 && < 5
                      , mtl
+                     , stm
                      , time
                      , lens
                      , containers
                      , async
+                     , random
   default-language:    Haskell2010
 
 source-repository head

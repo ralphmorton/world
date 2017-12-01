@@ -25,6 +25,7 @@ library
                      , Control.Monad.World.Exception
                      , Control.Monad.World.Record
                      , Control.Monad.World.Replay
+                     , Control.Monad.World.REPL
   build-depends:       base >= 4.7 && < 5
                      , mtl
                      , stm

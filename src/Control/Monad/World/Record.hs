@@ -7,7 +7,7 @@ module Control.Monad.World.Record (
     record
 ) where
 
-import Prelude hiding (getLine, putStrLn, readFile, writeFile)
+import Prelude hiding (getLine, putStr, putStrLn, readFile, writeFile)
 
 import Control.Monad.World.Arbiter
 import Control.Monad.World.Class
@@ -37,21 +37,27 @@ record f = do
 instance MonadConcurrent m => MonadConcurrent (ArbiterT Record m) where
     mapConcurrently = mapConcurrentlyImpl
 
-instance MonadWorld m => MonadWorld (ArbiterT Record m) where
-    -- System.Concurrent
+instance MonadTime m => MonadTime (ArbiterT Record m) where
     threadDelay = runOp . threadDelay
-
-    -- System.IO
-    getLine = runOp getLine
-    putStrLn = runOp . putStrLn
-    readFile = runOp . readFile
-    writeFile fp = runOp . writeFile fp
-
-    -- Data.Time
     getCurrentTime = runOp getCurrentTime
 
-    -- System.Random
-    randomRIO = runOp . randomRIO
+instance MonadTerminal m => MonadTerminal (ArbiterT Record m) where
+    getLine = runOp getLine
+    putStr = runOp . putStr
+    putStrLn = runOp . putStrLn
+
+instance MonadFile m => MonadFile (ArbiterT Record m) where
+    readFile = runOp . readFile
+    writeFile fp = runOp . writeFile fp
+    readFileT = runOp . readFileT
+    writeFileT fp = runOp . writeFileT fp
+    readFileBS = runOp . readFileBS
+    writeFileBS fp = runOp . writeFileBS fp
+    readFileLBS = runOp . readFileLBS
+    writeFileLBS fp = runOp . writeFileLBS fp
+
+instance MonadRandom m => MonadRandom (ArbiterT Record m) where
+    randomR = runOp . randomR
 
 --
 -- Implementation of `mapConcurrently`

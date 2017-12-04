@@ -5,7 +5,10 @@
 
 module Control.Monad.World (
     MonadConcurrent(..),
-    MonadWorld(..),
+    MonadTime(..),
+    MonadTerminal(..),
+    MonadFile(..),
+    MonadRandom(..),
     AsException(..),
     TerminalException(..),
     FileException(..),

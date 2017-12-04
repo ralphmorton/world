@@ -7,7 +7,7 @@ module Control.Monad.World.REPL (
     repl
 ) where
 
-import Prelude hiding (getLine, putStrLn, readFile, writeFile)
+import Prelude hiding (getLine, putStr, putStrLn, readFile, writeFile)
 
 import Control.Monad.World.Class
 
@@ -47,14 +47,27 @@ instance MonadIO m => MonadIO (ReplT m) where
 instance Monad m => MonadConcurrent (ReplT m) where
     mapConcurrently = mapM
 
-instance (MonadIO m, MonadWorld m) => MonadWorld (ReplT m) where
+instance (MonadIO m, MonadTime m) => MonadTime (ReplT m) where
     threadDelay = lift . threadDelay
+    getCurrentTime = fmap pure $ input "Enter the current time is ISO-8601 format"
+
+instance (MonadIO m, MonadTerminal m) => MonadTerminal (ReplT m) where
     getLine = fmap pure $ input "Enter a line of input"
+    putStr = fmap pure . output "putStr"
     putStrLn = fmap pure . output "putStrLn"
+
+instance (MonadIO m, MonadFile m) => MonadFile (ReplT m) where
     readFile = fmap pure . input . ("Enter the contents for file " <>)
     writeFile fp = fmap pure . output ("Contents of file " <> fp)
-    getCurrentTime = fmap pure $ input "Enter the current time is ISO-8601 format"
-    randomRIO (s, e) = input $ "Enter a value between " <> show s <> " and " <> show e
+    readFileT = fmap pure . input . ("Enter the contents for file " <>)
+    writeFileT fp = fmap pure . output ("Contents of file " <> fp)
+    readFileBS = fmap pure . input . ("Enter the contents for file " <>)
+    writeFileBS fp = fmap pure . output ("Contents of file " <> fp)
+    readFileLBS = fmap pure . input . ("Enter the contents for file " <>)
+    writeFileLBS fp = fmap pure . output ("Contents of file " <> fp)
+
+instance (MonadIO m, MonadRandom m) => MonadRandom (ReplT m) where
+    randomR (s, e) = input $ "Enter a value between " <> show s <> " and " <> show e
 
 input :: (Read a, MonadIO m) => String -> m a
 input prompt = liftIO $ do

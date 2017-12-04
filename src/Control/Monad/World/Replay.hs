@@ -7,7 +7,7 @@ module Control.Monad.World.Replay (
     replay
 ) where
 
-import Prelude hiding (getLine, putStrLn, readFile, writeFile)
+import Prelude hiding (getLine, putStr, putStrLn, readFile, writeFile)
 
 import Control.Monad.World.Arbiter
 import Control.Monad.World.Class
@@ -33,21 +33,27 @@ replay f tape = do
 instance Monad m => MonadConcurrent (ArbiterT Replay m) where
     mapConcurrently = mapConcurrentlyImpl
 
-instance Monad m => MonadWorld (ArbiterT Replay m) where
-    -- System.Concurrent
+instance Monad m => MonadTime (ArbiterT Replay m) where
     threadDelay = const runOp
-
-    -- System.IO
-    getLine = runOp
-    putStrLn = const runOp
-    readFile = const runOp
-    writeFile _ = const runOp
-
-    -- Data.Time
     getCurrentTime = runOp
 
-    -- System.Random
-    randomRIO = const runOp
+instance Monad m => MonadTerminal (ArbiterT Replay m) where
+    getLine = runOp
+    putStr = const runOp
+    putStrLn = const runOp
+
+instance Monad m => MonadFile (ArbiterT Replay m) where
+    readFile = const runOp
+    writeFile _ = const runOp
+    readFileT = const runOp
+    writeFileT _ = const runOp
+    readFileBS = const runOp
+    writeFileBS _ = const runOp
+    readFileLBS = const runOp
+    writeFileLBS _ = const runOp
+
+instance Monad m => MonadRandom (ArbiterT Replay m) where
+    randomR = const runOp
 
 --
 -- Implementation of `mapConcurrently`

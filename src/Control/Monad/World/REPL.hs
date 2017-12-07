@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Control.Monad.World.REPL (
     repl
@@ -45,6 +46,7 @@ instance MonadIO m => MonadIO (ReplT m) where
     liftIO = ReplT . liftIO
 
 instance Monad m => MonadConcurrent (ReplT m) where
+    type ConcurrentC (ReplT m) b = ConcurrentC m b
     mapConcurrently = mapM
 
 instance (MonadIO m, MonadTime m) => MonadTime (ReplT m) where

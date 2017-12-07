@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Control.Monad.World.Replay (
     replay
@@ -31,6 +32,7 @@ replay f tape = do
             False -> Left (TapeNotFullyDepleted depleted)
 
 instance Monad m => MonadConcurrent (ArbiterT Replay m) where
+    type ConcurrentC (ArbiterT Replay m) b = (Read b, Show b)
     mapConcurrently = mapConcurrentlyImpl
 
 instance Monad m => MonadTime (ArbiterT Replay m) where

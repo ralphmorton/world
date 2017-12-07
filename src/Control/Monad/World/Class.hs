@@ -1,5 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Control.Monad.World.Class (
+    Any,
     MonadConcurrent(..),
     TimeException(..),
     MonadTime(..),
@@ -25,20 +30,27 @@ import qualified Data.ByteString.Lazy.Char8 as BL
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Time as Time
+import GHC.Exts (Constraint)
 import qualified System.IO as IO
 import qualified System.Random as Random
+
+class Any a where
+instance Any a where
 
 --
 -- Concurrent
 --
 
 class Monad m => MonadConcurrent m where
-    mapConcurrently :: (Read b, Show b) => (a -> m b) -> [a] -> m [b] -- TODO: do some stuff with Monoid1 or similar to get traversable
+    type ConcurrentC m b :: Constraint
+    mapConcurrently :: ConcurrentC m b => (a -> m b) -> [a] -> m [b] -- TODO: do some stuff with Monoid1 or similar to get traversable
 
 instance MonadConcurrent IO where
+    type ConcurrentC IO b = Any b
     mapConcurrently = Async.mapConcurrently
 
 instance (Read e, Show e, MonadConcurrent m) => MonadConcurrent (ExceptT e m) where
+    type ConcurrentC (ExceptT e m) b = (ConcurrentC m (Either e b))
     mapConcurrently f ax = do
         results <- lift $ mapConcurrently (runExceptT . f) ax
         case sequence results of
@@ -46,6 +58,7 @@ instance (Read e, Show e, MonadConcurrent m) => MonadConcurrent (ExceptT e m) wh
             Right bx -> pure bx
 
 instance MonadConcurrent m => MonadConcurrent (ReaderT r m) where
+    type ConcurrentC (ReaderT r m) b = ConcurrentC m b
     mapConcurrently f ax = do
         r <- R.ask
         lift $ mapConcurrently (flip runReaderT r . f) ax

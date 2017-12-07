@@ -1,7 +1,10 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Control.Monad.World.Record (
     record
@@ -35,6 +38,7 @@ record f = do
 --
 
 instance MonadConcurrent m => MonadConcurrent (ArbiterT Record m) where
+    type ConcurrentC (ArbiterT Record m) b = (Read b, Show b, ConcurrentC m (Either ArbiterError (Tape, (Key, b))))
     mapConcurrently = mapConcurrentlyImpl
 
 instance MonadTime m => MonadTime (ArbiterT Record m) where
@@ -63,7 +67,7 @@ instance MonadRandom m => MonadRandom (ArbiterT Record m) where
 -- Implementation of `mapConcurrently`
 --
 
-mapConcurrentlyImpl :: (MonadConcurrent m, Read b, Show b) => (a -> ArbiterT Record m b) -> [a] -> ArbiterT Record m [b]
+mapConcurrentlyImpl :: (Read b, Show b, MonadConcurrent m, ConcurrentC m (Either ArbiterError (Tape, (Key, b)))) => (a -> ArbiterT Record m b) -> [a] -> ArbiterT Record m [b]
 mapConcurrentlyImpl f ax = do
     keyed <- attachKeys ax
     results <- lift $ mapConcurrently (record . withKey f) keyed

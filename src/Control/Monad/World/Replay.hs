@@ -55,6 +55,7 @@ instance Monad m => MonadFile (ArbiterT Replay m) where
     writeFileLBS _ = const runOp
 
 instance Monad m => MonadRandom (ArbiterT Replay m) where
+    type RandomC (ArbiterT Replay m) a = (Read a, Show a)
     randomR = const runOp
 
 --

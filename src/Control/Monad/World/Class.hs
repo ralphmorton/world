@@ -193,18 +193,23 @@ instance MonadFile m => MonadFile (StateT r m) where
 --
 
 class Monad m => MonadRandom m where
-    randomR :: (Read a, Show a, Random.Random a) => (a, a) -> m a
+    type RandomC m a :: Constraint
+    randomR :: (RandomC m a, Random.Random a) => (a, a) -> m a
 
 instance MonadRandom IO where
+    type RandomC IO a = Any a
     randomR = Random.randomRIO
 
 instance MonadRandom m => MonadRandom (ExceptT e m) where
+    type RandomC (ExceptT e m) a = RandomC m a
     randomR = lift . randomR
 
 instance MonadRandom m => MonadRandom (ReaderT r m) where
+    type RandomC (ReaderT e m) a = RandomC m a
     randomR = lift . randomR
 
 instance MonadRandom m => MonadRandom (StateT r m) where
+    type RandomC (StateT e m) a = RandomC m a
     randomR = lift . randomR
 
 --

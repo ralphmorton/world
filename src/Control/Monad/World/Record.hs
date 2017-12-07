@@ -61,6 +61,7 @@ instance MonadFile m => MonadFile (ArbiterT Record m) where
     writeFileLBS fp = runOp . writeFileLBS fp
 
 instance MonadRandom m => MonadRandom (ArbiterT Record m) where
+    type RandomC (ArbiterT Record m) a = (Read a, Show a, RandomC m a)
     randomR = runOp . randomR
 
 --

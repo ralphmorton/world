@@ -69,6 +69,7 @@ instance (MonadIO m, MonadFile m) => MonadFile (ReplT m) where
     writeFileLBS fp = fmap pure . output ("Contents of file " <> fp)
 
 instance (MonadIO m, MonadRandom m) => MonadRandom (ReplT m) where
+    type RandomC (ReplT m) a = (Read a, Show a)
     randomR (s, e) = input $ "Enter a value between " <> show s <> " and " <> show e
 
 input :: (Read a, MonadIO m) => String -> m a
